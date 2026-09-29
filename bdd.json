@@ -1,0 +1,9 @@
+{
+	"joueurs": [
+		{
+			"identifiant": "thomas",
+			"streak": 0,
+			"historique": []
+		}
+	]
+}

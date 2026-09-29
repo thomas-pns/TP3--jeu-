@@ -6,12 +6,30 @@ class fonctions():
         pass
 
 mots=[]
+joueurs=[]
 
 with open("mots.json") as file: 
-    list_mots=json.load(file)
-    mots=list_mots
+    mots=json.load(file)
 file.close()
 
+with open("bdd.json") as file: 
+    joueurs=json.load(file)
+file.close()
+
+def login():
+    identifiant=input("Quel est ton identifiant ? \n")
+    for i in joueurs["joueurs"]:
+        if i["identifiant"]==identifiant:
+            print(f"Bienvenue {identifiant} !")
+            return i
+    else:
+        print(f"Ton identifiant n'existe pas, on va le créer !")
+        new_joueur={"identifiant":identifiant,"streak":0,"historique":[]}
+        joueurs["joueurs"].append(new_joueur)
+        with open("bdd.json", "w") as file:
+            json.dump(joueurs, file, indent=4)
+        file.close()
+        return new_joueur
 
 def affiche_mot(list):
     mot=""
@@ -48,10 +66,20 @@ def find_key(mot, lettre):
 
 def partie(mot_choice, mot_inconnu, tentatives):
         tentatives_restantes=tentatives
+
+        lettres_use=[]
+
         
         print(affiche_mot(mot_inconnu))
 
         lettre=devine_lettre(tentatives_restantes)
+
+        if lettre in lettres_use:
+            print(f"Tu as déjà utilisé cette lettre : {lettre}")
+            print(f"Voici les lettres que tu as déjà utilisé : {lettres_use}")
+            return partie(mot_choice,mot_inconnu,tentatives_restantes)
+        else:
+            lettres_use.append(lettre)
 
         if lettre in mot_choice:
             positions=find_key(mot_choice,lettre)
@@ -72,8 +100,19 @@ def partie(mot_choice, mot_inconnu, tentatives):
         else:
             return partie(mot_choice,mot_inconnu,tentatives_restantes)
 
+def add_statistic(joueur, win, tentatives_restantes, mot_choice):
+    if win:
+        joueur["streak"]+=1
+        joueur["historique"].append({"mot":mot_choice,"win":True,"tentatives_restantes":tentatives_restantes})
+    else:
+        joueur["streak"]=0
+        joueur["historique"].append({"mot":mot_choice,"win":False,"tentatives_restantes":tentatives_restantes})
 
-def jeu(cheat_mode):
+    with open("bdd.json", "w") as file:
+        json.dump(joueurs, file, indent=4)
+    file.close()
+
+def jeu(cheat_mode, joueur):
 
     lettres=[5,6,7,8,9,10,12]
     nombre_lettres=r.choice(lettres)
@@ -82,7 +121,6 @@ def jeu(cheat_mode):
 
     mot_inconnu=["_" for i in range(nombre_lettres)]
 
-    lettres_use=[]
 
     # Première lettre :
     mot_inconnu[0]=mot_choice[0]
@@ -92,12 +130,14 @@ def jeu(cheat_mode):
     
     win,tentatives,mot_inconnu=partie(mot_choice,mot_inconnu,8)
 
+    add_statistic(joueur, win, tentatives, mot_choice)
+
     if win:
         print(f"Le mot était bien : {affiche_mot(mot_inconnu)}")
         print(f"il te restait : {tentatives} tentatives")
         print(f"Félicitation tu as gagné !!")
 
-        print("Comme tu es très for veux tu rejouer ?")
+        print("Comme tu es très fort veux tu rejouer ?")
 
         rejouer(cheat_mode)
 
