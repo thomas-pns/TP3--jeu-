@@ -73,7 +73,8 @@ function guessLetter() {
 
 function playAgain() {
     socket.emit('play_again', { room_id: roomId });
-    resetGame();
+    playAgainBtn.disabled = true;
+    playAgainBtn.textContent = 'En attente…';
 }
 
 function leaveRoom() {
@@ -96,56 +97,83 @@ socket.on('joined_game', data => {
 });
 
 socket.on('player_joined', data => {
-    if (data.id !== playerId) {
-        // Notify that opponent joined
-        if (currentState === 'waiting_for_word') {
-            // maybe do nothing
-        }
-    }
+    showWaiting(`${data.name} a rejoint la salle. Préparation de la manche…`);
+});
+
+socket.on('game_full', () => {
+    alert('Cette salle contient déjà deux joueurs.');
 });
 
 socket.on('your_turn_choose_word', () => {
     isChooser = true;
+    resetGame();
     showChooseWord();
 });
 
-socket.on('waiting_for_opponent_word', () => {
+socket.on('waiting_for_opponent_word', data => {
     isChooser = false;
-    showWaiting();
+    resetGame();
+    showWaiting(`${data?.name || 'Votre adversaire'} choisit un mot…`);
 });
 
 socket.on('word_set', data => {
     updateWordDisplay(data.masked);
+    guessedLettersDiv.textContent = (data.guessed_letters || []).join(', ');
+    updateRemainingAttempts(data.errors || 0);
+    updateHangmanImage(data.errors || 0);
     showPlaying();
+    setGuessingEnabled(false);
     messageDiv.textContent = 'Au tour de l\'adversaire de deviner...';
 });
 
 socket.on('your_turn_guess', () => {
+    setGuessingEnabled(true);
     messageDiv.textContent = 'À vous de deviner une lettre';
+    letterInput.focus();
 });
 
 socket.on('opponent_turn', () => {
+    setGuessingEnabled(false);
     messageDiv.textContent = 'Au tour de l\'adversaire...';
 });
 
 socket.on('correct_guess', data => {
     updateWordDisplay(data.masked);
-    updateGuessedLetters(data.letter);
+    guessedLettersDiv.textContent = (data.guessed_letters || []).join(', ');
     messageDiv.textContent = `Bonne lettre ! ${data.letter}`;
 });
 
 socket.on('wrong_guess', data => {
-    updateGuessedLetters(data.letter);
+    guessedLettersDiv.textContent = (data.guessed_letters || []).join(', ');
     updateRemainingAttempts(data.errors);
     messageDiv.textContent = `Mauvaise lettre ! Il reste ${8 - data.errors} tentatives`;
     updateHangmanImage(data.errors);
 });
 
 socket.on('game_over', data => {
+    setGuessingEnabled(false);
     showGameOver(data);
 });
 
+socket.on('rematch_waiting', () => {
+    gameOverTitle.textContent = 'Revanche demandée !';
+    gameOverWord.textContent = 'En attente de la réponse de votre adversaire…';
+});
+
+socket.on('opponent_wants_rematch', data => {
+    gameOverWord.textContent = `${data.name} souhaite rejouer. Cliquez sur « Rejouer » pour accepter.`;
+    playAgainBtn.disabled = false;
+    playAgainBtn.textContent = 'Accepter la revanche';
+});
+
+socket.on('opponent_left', () => {
+    resetGame();
+    showWaiting('Votre adversaire a quitté la salle. En attente d’un nouveau joueur…');
+});
+
 socket.on('error', data => {
+    playAgainBtn.disabled = false;
+    playAgainBtn.textContent = 'Rejouer';
     alert(data.msg);
 });
 
@@ -166,11 +194,12 @@ function showGameScreen() {
     gameScreen.style.display = 'block';
 }
 
-function showWaiting() {
+function showWaiting(message = 'En attente d’un autre joueur…') {
     waitingDiv.style.display = 'block';
     chooseWordDiv.style.display = 'none';
     playingDiv.style.display = 'none';
     gameOverDiv.style.display = 'none';
+    waitingDiv.querySelector('p').textContent = message;
     currentState = 'waiting';
 }
 
@@ -180,6 +209,8 @@ function showChooseWord() {
     playingDiv.style.display = 'none';
     gameOverDiv.style.display = 'none';
     currentState = 'choosing';
+    submitWordBtn.disabled = false;
+    wordInput.value = '';
     wordInput.focus();
 }
 
@@ -191,21 +222,27 @@ function showPlaying() {
     currentState = 'playing';
 }
 
+function setGuessingEnabled(enabled) {
+    letterInput.disabled = !enabled;
+    guessBtn.disabled = !enabled;
+}
+
 function showGameOver(data) {
     waitingDiv.style.display = 'none';
     chooseWordDiv.style.display = 'none';
     playingDiv.style.display = 'none';
     gameOverDiv.style.display = 'block';
     currentState = 'gameover';
-    gameOverTitle.textContent = data.winner === playerId ? 'Vous avez gagné !' : 'Vous avez perdu...';
+    gameOverTitle.textContent = data.winner === playerId
+        ? 'Vous avez gagné !'
+        : `${data.winner_name || 'Votre adversaire'} a gagné !`;
     gameOverWord.textContent = `Le mot était : ${data.word}`;
-    // Build scores string
     const scoresObj = data.scores;
-    let scoresText = '';
-    for (const [id, score] of Object.entries(scoresObj)) {
-        scoresText += `Joueur ${id.substring(0,5)}: ${score}  `;
-    }
-    scoresSpan.textContent = scoresText;
+    scoresSpan.textContent = Object.entries(scoresObj)
+        .map(([id, score]) => `${data.player_names?.[id] || 'Joueur'} : ${score}`)
+        .join(' · ');
+    playAgainBtn.disabled = false;
+    playAgainBtn.textContent = 'Rejouer';
 }
 
 function resetGame() {

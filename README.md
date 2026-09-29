@@ -1,81 +1,53 @@
-﻿# Le Pendu Multijoueur Web
+# Le Pendu — multijoueur web
 
-Une version en ligne du jeu du pendu avec multijoueur en temps réel, responsive et animée.
+Application Flask + Socket.IO responsive, avec des salles de deux joueurs, choix de mot, score par manche et revanche.
 
-## Fonctionnalités
-- ✅ Multijoueur en temps réel via WebSocket (Socket.IO)
-- ✅ Interface responsive (mobile, tablette, desktop)
-- ✅ Animations du bonhomme pendue
-- ✅ Salle de jeu avec identifiants
-- ✅ Chat intégré (via événements Socket.IO)
-- ✅ Gestion des scores
-- ✅ Design moderne et dégradé animé
+## Lancer en local
 
-## Prérequis
-- Python 3.7+
-- pip
-- (Optionnel) virtualenv
+Python 3.13.5 est indiqué dans `.python-version`.
 
-## Installation
-1. Clonez ce dépôt ou copiez le dossier `TP3_web` sur votre machine.
-2. Accédez au dossier :
-   ```bash
-   cd TP3_web
-   ```
-3. Installez les dépendances Python :
-   ```bash
-   pip install flask flask-socketio
-   ```
-4. (Optionnel) Créez un environnement virtuel pour éviter les conflits de dépendances.
-
-## Lancer l'application
-```bash
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python app.py
 ```
-L'application sera accessible à l'adresse : http://localhost:5000
 
-Pour y accéder depuis d'autres appareils sur le même réseau WiFi :
-1. Trouvez l'adresse IP de votre machine (ex: `ipconfig` sur Windows, `ifconfig` sur Mac/Linux).
-2. Depuis un autre appareil, allez à `http://<VOTRE_IP>:5000` dans le navigateur.
+Ouvrir ensuite <http://localhost:5000>. Le point de contrôle de santé est `/healthz`.
 
-## Structure du projet
-```
-TP3_web/
-├── app.py                 # Serveur Flask-SocketIO
-├── templates/
-│   └── index.html         # Page principale
-├── static/
-│   ├── css/
-│   │   └── style.css      # Styles et animations
-│   ├── js/
-│   │   └── game.js        # Logique client Socket.IO
-│   └── images/            # Images du bonhomme (bonhomme1.gif à bonhomme8.gif)
-└── mots.json              # Liste de mots par longueur (réutilisé du TP3 original)
+Lancer les tests :
+
+```powershell
+python -m unittest discover -s tests -v
 ```
 
-## Comment jouer
-1. Ouvrez l'application dans votre navigateur.
-2. Entrez votre nom et éventuellement un ID de salle (laissez vide pour créer une nouvelle salle).
-3. Partagez l'ID de la salle avec votre adversaire pour qu'il puisse vous rejoindre.
-4. Une fois deux joueurs connectés, l'un sera désigné aléatoirement pour choisir un mot.
-5. Le joueur qui choisit le mot doit entrer un mot valide (lettres uniquement, longueur ≥ 3).
-6. L'autre joueur tente de deviner le mot lettre par lettre.
-7. Le jeu continue jusqu'à ce que le mot soit trouvé ou que le bonhomme soit complet.
-8. À la fin de la partie, vous pouvez choisir de rejouer ou de quitter la salle.
+## Déployer sur Render
 
-## Personnalisation
-- Pour modifier la liste des mots, éditez `mots.json` (même format que l'original).
-- Pour changer les images du bonhomme, remplacez les fichiers dans `static/images/` en conservant le nommage `bonhomme1.gif` à `bonhomme8.gif`.
-- Pour ajuster le style, éditez `static/css/style.css`.
-- Pour modifier la logique du jeu côté client, éditez `static/js/game.js`.
-- Pour modifier la logique du serveur, éditez `app.py`.
+Les fichiers web (`app.py`, `templates/`, `static/`) sont à la racine du dépôt. Dans les paramètres du service Render, laisser **Root Directory** vide.
 
-## Déploiement en production
-Pour un déploiement sérieux, considérez :
-- Utiliser un serveur WSGI comme Gunicorn avec worker gevent: `gunicorn -k gevent -w 1 app:app`
-- Mettre derrière un reverse proxy (Nginx, Apache) pour le SSL et la gestion des ports.
-- Configurer les variables d'environnement pour la clé secrète.
-- Utiliser une base de données pour persister les scores et les historiques.
+- **Build Command** : `pip install -r requirements.txt`
+- **Start Command** :
 
-## Remarques légales
-Ce projet est destiné à un usage éducatif et personnel. Les images utilisées proviennent du TP3 original et sont supposées libres de droits dans ce contexte.
+  ```bash
+  gunicorn --worker-class gthread --workers 1 --threads 100 --bind 0.0.0.0:$PORT app:app
+  ```
+
+Le dépôt fournit aussi un `render.yaml` avec ces réglages et un contrôle de santé. `.python-version` sélectionne Python 3.13.5. Flask-SocketIO est explicitement configuré en mode `threading`; `simple-websocket` permet la prise en charge WebSocket avec Gunicorn. **Ne remettez pas `eventlet` ou `gevent` dans `requirements.txt`** : leurs versions précédentes échouaient à l’installation sur le runtime Python 3.14.
+
+Si le service Render existe déjà, vérifiez/modifiez sa commande de démarrage dans **Settings → Build & Deploy → Start Command**, puis lancez un déploiement après avoir poussé les changements. Ajoutez une variable `SECRET_KEY` dans Render (valeur aléatoire longue) si le service n’est pas créé depuis `render.yaml`.
+
+Après le déploiement, ouvrez l’URL Render sur deux appareils, créez une salle sur le premier puis rejoignez-la avec son identifiant sur le second.
+
+## Structure
+
+```text
+app.py
+requirements.txt
+.python-version
+render.yaml
+templates/index.html
+static/css/style.css
+static/js/game.js
+static/images/bonhomme1.gif … bonhomme8.gif
+tests/test_app.py
+```

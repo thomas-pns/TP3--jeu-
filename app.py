@@ -1,169 +1,353 @@
-﻿from flask import Flask, render_template, session, copy_current_request_context, request
-from flask_socketio import SocketIO, emit, join_room, leave_room, close_room, rooms, disconnect
-import json
-import random
-from pathlib import Path
 import os
+import re
+import secrets
+
+from flask import Flask, jsonify, render_template, request
+from flask_socketio import SocketIO, emit, join_room, leave_room
+
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret!'
-# async_mode='threading' évite les dépendances natives (eventlet/gevent) qui posent problème à l'installation
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
 
-BASE_DIR = Path(__file__).resolve().parent
-with open(BASE_DIR / "mots.json", encoding="utf-8") as f:
-    mots = json.load(f)
+# gthread + simple-websocket is the production setup configured for Render.
+# Explicit threading mode prevents Flask-SocketIO from auto-selecting gevent/eventlet.
+socketio = SocketIO(app, async_mode="threading")
 
-# état des parties, indexé par ID de salle
+MAX_ERRORS = 8
+MAX_WORD_LENGTH = 30
 games = {}
 
-def get_random_word(length=None):
-    if length is None:
-        length = random.choice(list(mots.keys()))
-    return random.choice(mots[str(length)]).lower()
 
-def init_game(room_id, player1_sid, word=None):
-    if word is None:
-        word = get_random_word()
-    games[room_id] = {
-        'word': word,
-        'masked': ['_' if i != 0 else word[0] for i in range(len(word))],  # première lettre révélée
-        'guessed_letters': set(),
-        'errors': 0,
-        'max_errors': 8,
-        'players': {player1_sid: {'name': f'Joueur1', 'score': 0}},
-        'current_turn': player1_sid,  # qui doit jouer ? on gère cela via les événements
-        'state': 'waiting_for_word',  # waiting_for_word / playing / finished
-        'winner': None
-    }
-    return games[room_id]
-
-@app.route('/')
+@app.get("/")
 def index():
-    return render_template('index.html')
+    return render_template("index.html")
 
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected:', request.sid)
-    emit('connected', {'sid': request.sid})
 
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Client disconnected:', request.sid)
+@app.get("/healthz")
+def health_check():
+    return jsonify(status="ok")
+
+
+def _players_payload(game):
+    return [
+        {"id": sid, "name": player["name"], "score": player["score"]}
+        for sid, player in game["players"].items()
+    ]
+
+
+def _new_room_id():
+    room_id = secrets.token_urlsafe(6)
+    while room_id in games:
+        room_id = secrets.token_urlsafe(6)
+    return room_id
+
+
+def _reset_round(game):
+    game.update(
+        state="waiting",
+        word=None,
+        masked=[],
+        guessed_letters=set(),
+        errors=0,
+        chooser=None,
+        guesser=None,
+        rematch_votes=set(),
+    )
+
+
+def _start_round(room_id, game, chooser_sid):
+    player_ids = list(game["players"])
+    if len(player_ids) != 2 or chooser_sid not in game["players"]:
+        _reset_round(game)
+        return
+
+    guesser_sid = next(sid for sid in player_ids if sid != chooser_sid)
+    game.update(
+        state="choosing",
+        word=None,
+        masked=[],
+        guessed_letters=set(),
+        errors=0,
+        chooser=chooser_sid,
+        guesser=guesser_sid,
+        rematch_votes=set(),
+        round=game.get("round", 0) + 1,
+    )
+    socketio.emit(
+        "round_started",
+        {"round": game["round"], "players": _players_payload(game)},
+        to=room_id,
+    )
+    socketio.emit("your_turn_choose_word", {"room_id": room_id}, to=chooser_sid)
+    socketio.emit(
+        "waiting_for_opponent_word",
+        {"name": game["players"][chooser_sid]["name"]},
+        to=guesser_sid,
+    )
+
+
+def _finish_round(room_id, game, winner_sid):
+    if game["state"] != "playing" or winner_sid not in game["players"]:
+        return
+
+    game["state"] = "finished"
+    game["winner"] = winner_sid
+    game["players"][winner_sid]["score"] += 1
+    socketio.emit(
+        "game_over",
+        {
+            "winner": winner_sid,
+            "winner_name": game["players"][winner_sid]["name"],
+            "word": game["word"],
+            "scores": {
+                sid: player["score"] for sid, player in game["players"].items()
+            },
+            "player_names": {
+                sid: player["name"] for sid, player in game["players"].items()
+            },
+        },
+        to=room_id,
+    )
+
+
+def _remove_player(room_id, sid):
+    game = games.get(room_id)
+    if not game or sid not in game["players"]:
+        return
+
+    del game["players"][sid]
+    remaining_players = list(game["players"])
+    if not remaining_players:
+        games.pop(room_id, None)
+        return
+
+    _reset_round(game)
+    socketio.emit("opponent_left", to=remaining_players[0])
+
+
+@socketio.on("connect")
+def handle_connect(auth=None):
+    emit("connected", {"sid": request.sid})
+
+
+@socketio.on("disconnect")
+def handle_disconnect(reason=None):
+    sid = request.sid
     for room_id, game in list(games.items()):
-        if request.sid in game['players']:
-            leave_room(room_id)
-            if len(game['players']) == 1:
-                remaining_sid = [sid for sid in game['players'] if sid != request.sid][0]
-                emit('opponent_left', room=remaining_sid)
-                del games[room_id]
-            else:
-                del game['players'][request.sid]
-                if game['current_turn'] == request.sid:
-                    next_sid = [sid for sid in game['players'] if sid != request.sid][0]
-                    game['current_turn'] = next_sid
-                    emit('turn_change', {'sid': next_sid}, room=room_id)
+        if sid in game["players"]:
+            _remove_player(room_id, sid)
             break
 
-@socketio.on('join_game')
+
+@socketio.on("join_game")
 def handle_join_game(data):
+    if not isinstance(data, dict):
+        emit("error", {"msg": "Données de connexion invalides."})
+        return
+
     sid = request.sid
-    player_name = data.get('name', 'Anonyme')
-    room_id = data.get('room_id')
-    if not room_id:
-        import uuid
-        room_id = str(uuid.uuid4())
+    # A socket may belong to only one game room at a time.
+    if any(sid in game["players"] for game in games.values()):
+        emit("error", {"msg": "Vous êtes déjà dans une salle."})
+        return
+
+    name = str(data.get("name", "Anonyme")).strip()[:20] or "Anonyme"
+    requested_room = str(data.get("room_id") or "").strip()
+    if requested_room and not re.fullmatch(r"[A-Za-z0-9_-]{3,50}", requested_room):
+        emit("error", {"msg": "L'identifiant de salle doit contenir 3 à 50 lettres, chiffres, tirets ou _."})
+        return
+
+    room_id = requested_room or _new_room_id()
+    game = games.get(room_id)
+    if game and len(game["players"]) >= 2:
+        emit("game_full")
+        return
+
+    if game is None:
+        game = {
+            "players": {},
+            "round": 0,
+            "state": "waiting",
+            "rematch_votes": set(),
+        }
+        games[room_id] = game
+
     join_room(room_id)
-    if room_id not in games:
-        init_game(room_id, sid)
-        games[room_id]['players'][sid] = {'name': player_name, 'score': 0}
-        emit('joined_game', {'room_id': room_id, 'player_id': sid, 'players': [{'id': sid, 'name': player_name}]}, room=sid)
-    else:
-        game = games[room_id]
-        if len(game['players']) >= 2:
-            emit('game_full', room=sid)
-            leave_room(room_id)
-            return
-        game['players'][sid] = {'name': player_name, 'score': 0}
-        emit('joined_game', {'room_id': room_id, 'player_id': sid, 'players': [{'id': k, 'name': v['name']} for k, v in game['players'].items()]}, room=sid)
-        emit('player_joined', {'id': sid, 'name': player_name}, room=room_id, include_self=False)
-        if len(game['players']) == 2:
-            game['state'] = 'waiting_for_word'
-            chooser = random.choice(list(game['players'].keys()))
-            game['chooser'] = chooser
-            emitter = [sid for sid in game['players'] if sid != chooser][0]
-            emit('your_turn_choose_word', room=chooser)
-            emit('waiting_for_opponent_word', room=emitter)
+    game["players"][sid] = {"name": name, "score": 0}
+    emit(
+        "joined_game",
+        {
+            "room_id": room_id,
+            "player_id": sid,
+            "players": _players_payload(game),
+        },
+        to=sid,
+    )
+    socketio.emit(
+        "player_joined",
+        {"id": sid, "name": name, "players": _players_payload(game)},
+        to=room_id,
+        skip_sid=sid,
+    )
 
-@socketio.on('submit_word')
+    if len(game["players"]) == 2:
+        chooser_sid = secrets.choice(list(game["players"]))
+        _start_round(room_id, game, chooser_sid)
+
+
+@socketio.on("submit_word")
 def handle_submit_word(data):
-    sid = request.sid
-    room_id = data.get('room_id')
-    word = data.get('word', '').strip().lower()
-    if not room_id or room_id not in games:
-        emit('error', {'msg': 'Invalid room'}, room=sid)
+    if not isinstance(data, dict):
+        emit("error", {"msg": "Données de mot invalides."})
         return
-    game = games[room_id]
-    if sid != game.get('chooser'):
-        emit('error', {'msg': 'Not your turn'}, room=sid)
-        return
-    if not word.isalpha() or len(word) < 3:
-        emit('error', {'msg': 'Word must be letters only and at least 3 chars'}, room=sid)
-        return
-    game['word'] = word
-    game['masked'] = ['_' if i != 0 else word[0] for i in range(len(word))]
-    game['guessed_letters'] = set()
-    game['errors'] = 0
-    game['state'] = 'playing'
-    emitter = [s for s in game['players'] if s != sid][0]
-    emit('word_set', {'masked': ' '.join(game['masked'])}, room=room_id)
-    emit('your_turn_guess', room=emitter)
-    emit('opponent_turn', room=sid)
 
-@socketio.on('guess_letter')
+    sid = request.sid
+    room_id = str(data.get("room_id", ""))
+    game = games.get(room_id)
+    raw_word = data.get("word", "")
+    if not game or sid not in game["players"]:
+        emit("error", {"msg": "Salle introuvable."})
+        return
+    if game["state"] != "choosing" or sid != game.get("chooser"):
+        emit("error", {"msg": "Ce n'est pas à vous de choisir le mot."})
+        return
+    if not isinstance(raw_word, str):
+        emit("error", {"msg": "Le mot doit contenir uniquement des lettres."})
+        return
+
+    word = raw_word.strip().lower()
+    if not (3 <= len(word) <= MAX_WORD_LENGTH) or not word.isalpha():
+        emit(
+            "error",
+            {"msg": f"Choisissez un mot de 3 à {MAX_WORD_LENGTH} lettres, sans espace ni chiffre."},
+        )
+        return
+
+    game.update(
+        state="playing",
+        word=word,
+        masked=["_"] * len(word),
+        guessed_letters=set(),
+        errors=0,
+    )
+    socketio.emit(
+        "word_set",
+        {"masked": " ".join(game["masked"]), "errors": 0, "guessed_letters": []},
+        to=room_id,
+    )
+    socketio.emit("your_turn_guess", to=game["guesser"])
+    socketio.emit("opponent_turn", to=game["chooser"])
+
+
+@socketio.on("guess_letter")
 def handle_guess_letter(data):
-    sid = request.sid
-    room_id = data.get('room_id')
-    letter = data.get('letter', '').lower()
-    if not room_id or room_id not in games:
-        emit('error', {'msg': 'Invalid room'}, room=sid)
+    if not isinstance(data, dict):
+        emit("error", {"msg": "Données de lettre invalides."})
         return
-    game = games[room_id]
-    if game['state'] != 'playing':
-        emit('error', {'msg': 'Game not playing'}, room=sid)
-        return
-    guesser = [s for s in game['players'] if s != game.get('chooser')][0]
-    if sid != guesser:
-        emit('error', {'msg': 'Not your turn to guess'}, room=sid)
-        return
-    if len(letter) != 1 or not letter.isalpha():
-        emit('error', {'msg': 'Invalid letter'}, room=sid)
-        return
-    if letter in game['guessed_letters']:
-        emit('error', {'msg': 'Letter already guessed'}, room=sid)
-        return
-    game['guessed_letters'].add(letter)
-    if letter in game['word']:
-        for i, c in enumerate(game['word']):
-            if c == letter:
-                game['masked'][i] = letter
-        emit('correct_guess', {'letter': letter, 'masked': ' '.join(game['masked'])}, room=room_id)
-        if '_' not in game['masked']:
-            game['state'] = 'finished'
-            game['winner'] = guesser
-            game['players'][guesser]['score'] += 1
-            emit('game_over', {'winner': guesser, 'word': game['word'],
-                                 'scores': {k: v['score'] for k, v in game['players'].items()}}, room=room_id)
-    else:
-        game['errors'] += 1
-        emit('wrong_guess', {'letter': letter, 'errors': game['errors']}, room=room_id)
-        if game['errors'] >= game['max_errors']:
-            game['state'] = 'finished'
-            game['winner'] = game.get('chooser')
-            game['players'][game['winner']]['score'] += 1
-            emit('game_over', {'winner': game['winner'], 'word': game['word'],
-                                 'scores': {k: v['score'] for k, v in game['players'].items()}}, room=room_id)
 
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    sid = request.sid
+    room_id = str(data.get("room_id", ""))
+    game = games.get(room_id)
+    raw_letter = data.get("letter", "")
+    if not game or sid not in game["players"]:
+        emit("error", {"msg": "Salle introuvable."})
+        return
+    if game["state"] != "playing":
+        emit("error", {"msg": "La partie n'est pas en cours."})
+        return
+    if sid != game.get("guesser"):
+        emit("error", {"msg": "Ce n'est pas à vous de deviner."})
+        return
+    if not isinstance(raw_letter, str):
+        emit("error", {"msg": "Saisissez une seule lettre."})
+        return
+
+    letter = raw_letter.strip().lower()
+    if len(letter) != 1 or not letter.isalpha():
+        emit("error", {"msg": "Saisissez une seule lettre."})
+        return
+    if letter in game["guessed_letters"]:
+        emit("error", {"msg": f"La lettre « {letter} » a déjà été proposée."})
+        return
+
+    game["guessed_letters"].add(letter)
+    if letter in game["word"]:
+        for index, character in enumerate(game["word"]):
+            if character == letter:
+                game["masked"][index] = letter
+        socketio.emit(
+            "correct_guess",
+            {
+                "letter": letter,
+                "masked": " ".join(game["masked"]),
+                "guessed_letters": sorted(game["guessed_letters"]),
+            },
+            to=room_id,
+        )
+        if "_" not in game["masked"]:
+            _finish_round(room_id, game, game["guesser"])
+        return
+
+    game["errors"] += 1
+    socketio.emit(
+        "wrong_guess",
+        {
+            "letter": letter,
+            "errors": game["errors"],
+            "guessed_letters": sorted(game["guessed_letters"]),
+        },
+        to=room_id,
+    )
+    if game["errors"] >= MAX_ERRORS:
+        _finish_round(room_id, game, game["chooser"])
+
+
+@socketio.on("play_again")
+def handle_play_again(data):
+    if not isinstance(data, dict):
+        emit("error", {"msg": "Données de revanche invalides."})
+        return
+
+    sid = request.sid
+    room_id = str(data.get("room_id", ""))
+    game = games.get(room_id)
+    if not game or sid not in game["players"] or game["state"] != "finished":
+        emit("error", {"msg": "La revanche n'est pas disponible."})
+        return
+
+    game["rematch_votes"].add(sid)
+    if len(game["rematch_votes"]) < 2:
+        emit("rematch_waiting", to=sid)
+        opponent_sid = next(player_sid for player_sid in game["players"] if player_sid != sid)
+        socketio.emit(
+            "opponent_wants_rematch",
+            {"name": game["players"][sid]["name"]},
+            to=opponent_sid,
+        )
+        return
+
+    # Alternate the roles: the previous guesser chooses the next word.
+    next_chooser = game["guesser"]
+    _start_round(room_id, game, next_chooser)
+
+
+@socketio.on("leave_room")
+def handle_leave_room(data):
+    if not isinstance(data, dict):
+        return
+    room_id = str(data.get("room_id", ""))
+    sid = request.sid
+    if room_id and sid in games.get(room_id, {}).get("players", {}):
+        leave_room(room_id)
+        _remove_player(room_id, sid)
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", "5000"))
+    socketio.run(
+        app,
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        allow_unsafe_werkzeug=True,
+    )
