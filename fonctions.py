@@ -64,22 +64,19 @@ def find_key(mot, lettre):
 
 
 
-def partie(mot_choice, mot_inconnu, tentatives):
-        tentatives_restantes=tentatives
-
-        lettres_use=[]
-
+def partie(mot_choice, mot_inconnu, tentatives, lettres_use):
         
         print(affiche_mot(mot_inconnu))
 
-        lettre=devine_lettre(tentatives_restantes)
+        lettre=devine_lettre(tentatives)
 
         if lettre in lettres_use:
             print(f"Tu as déjà utilisé cette lettre : {lettre}")
             print(f"Voici les lettres que tu as déjà utilisé : {lettres_use}")
-            return partie(mot_choice,mot_inconnu,tentatives_restantes)
+            return partie(mot_choice,mot_inconnu,tentatives,lettres_use)
         else:
             lettres_use.append(lettre)
+            print(f"Voici les lettres que tu as déjà utilisé : {lettres_use}")
 
         if lettre in mot_choice:
             positions=find_key(mot_choice,lettre)
@@ -88,31 +85,31 @@ def partie(mot_choice, mot_inconnu, tentatives):
                 mot_inconnu[j]=lettre
 
         else:
-            tentatives_restantes=tentatives_restantes-1
-            print(f"Domage :( il te reste {tentatives_restantes} tentatives")
+            tentatives=tentatives-1
+            print(f"Domage :( il te reste {tentatives} tentatives")
 
 
         if not "_" in mot_inconnu:
-            return (True,tentatives_restantes, mot_inconnu)
-        elif tentatives_restantes == 0:
+            return (True,tentatives, mot_inconnu, lettres_use)
+        elif tentatives == 0:
             
-            return False,tentatives_restantes,mot_inconnu
+            return (False,tentatives,mot_inconnu,lettres_use)
         else:
-            return partie(mot_choice,mot_inconnu,tentatives_restantes)
+            return partie(mot_choice,mot_inconnu,tentatives,lettres_use)
 
-def add_statistic(joueur, win, tentatives_restantes, mot_choice):
+def add_statistic(joueur, win, tentatives_restantes, mot_choice, lettres_use):
     if win:
         joueur["streak"]+=1
-        joueur["historique"].append({"mot":mot_choice,"win":True,"tentatives_restantes":tentatives_restantes})
+        joueur["historique"].append({"mot":mot_choice,"win":True,"tentatives_restantes":tentatives_restantes,"lettres_use":lettres_use})
     else:
         joueur["streak"]=0
-        joueur["historique"].append({"mot":mot_choice,"win":False,"tentatives_restantes":tentatives_restantes})
+        joueur["historique"].append({"mot":mot_choice,"win":False,"tentatives_restantes":tentatives_restantes,"lettres_use":lettres_use})
 
     with open("bdd.json", "w") as file:
         json.dump(joueurs, file, indent=4)
     file.close()
 
-def jeu(cheat_mode, joueur):
+def jeu(cheat_mode, essais, joueur):
 
     lettres=[5,6,7,8,9,10,12]
     nombre_lettres=r.choice(lettres)
@@ -128,9 +125,9 @@ def jeu(cheat_mode, joueur):
     if cheat_mode:
         print(mot_inconnu, mot_choice)
     
-    win,tentatives,mot_inconnu=partie(mot_choice,mot_inconnu,8)
+    win,tentatives,mot_inconnu,lettres_use=partie(mot_choice,mot_inconnu,essais,[])
 
-    add_statistic(joueur, win, tentatives, mot_choice)
+    add_statistic(joueur, win, tentatives, mot_choice, lettres_use)
 
     if win:
         print(f"Le mot était bien : {affiche_mot(mot_inconnu)}")
@@ -139,7 +136,7 @@ def jeu(cheat_mode, joueur):
 
         print("Comme tu es très fort veux tu rejouer ?")
 
-        rejouer(cheat_mode)
+        rejouer(cheat_mode, joueur)
 
     else:
         print("Mince tu as perdu :(")
@@ -149,20 +146,20 @@ def jeu(cheat_mode, joueur):
 
         print("Veux tu rejouer tu peux t'améliorer ?")
 
-        anwser=input("Y : oui N : non")
+        anwser=input("Y : oui N : non \n")
     
-        rejouer(cheat_mode)
+        rejouer(cheat_mode, joueur)
 
-def rejouer(cheat_mode):
+def rejouer(cheat_mode, joueur):
     anwser=input("Y : oui N : non \n")
     
     while anwser.strip().lower() != "y" and anwser.strip().lower() != "n":
-        anwser=input("Y : oui N : non")
+        anwser=input("Y : oui N : non \n")
 
     if anwser.strip().lower()=="y":
         print("Super on recommence !")
         
-        jeu(cheat_mode)
+        jeu(cheat_mode, joueur)
     else:
         print("Merci d'avoir joué !")
         

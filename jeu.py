@@ -7,6 +7,6 @@ joueur=f.login()
 
 print(f"On commence ?")
 
-cheat_mode=True
+cheat_mode= False
 
-f.jeu(cheat_mode,joueur)
+f.jeu(cheat_mode, 8, joueur)
