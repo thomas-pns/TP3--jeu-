@@ -17,13 +17,13 @@ RANKS = (
 
 def streak_multiplier(streak: int) -> float:
     if streak >= 10:
-        return 2.5
+        return 10.0
     if streak >= 5:
-        return 2.0
+        return 5.0
     if streak >= 3:
-        return 1.5
+        return 3.0
     if streak >= 2:
-        return 1.25
+        return 2.0
     return 1.0
 
 

@@ -5,7 +5,7 @@ from scoring import calculate_score, rank_for_xp, streak_multiplier
 
 @pytest.mark.parametrize(
     ("streak", "expected"),
-    [(0, 1.0), (1, 1.0), (2, 1.25), (3, 1.5), (5, 2.0), (10, 2.5)],
+    [(0, 1.0), (1, 1.0), (2, 2.0), (3, 3.0), (5, 5.0), (10, 10.0)],
 )
 def test_streak_multipliers(streak, expected):
     assert streak_multiplier(streak) == expected
@@ -18,7 +18,7 @@ def test_win_awards_difficulty_speed_perfect_and_streak_bonuses():
     assert result["base"] == 175
     assert result["flawless_bonus"] == 35
     assert result["streak"] == 3
-    assert result["multiplier"] == 1.5
+    assert result["multiplier"] == 3.0
     assert result["score"] > result["base"]
 
 

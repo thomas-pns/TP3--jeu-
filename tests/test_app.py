@@ -1,12 +1,19 @@
 import unittest
+import tempfile
 import time
+from pathlib import Path
 from unittest.mock import patch
 
 import app as game_app
+from db import Database
 
 
 class PublishedAppTests(unittest.TestCase):
     def setUp(self):
+        self.original_database = game_app.database
+        self.database_dir = tempfile.TemporaryDirectory()
+        game_app.database = Database(Path(self.database_dir.name) / "test.sqlite3")
+        game_app.database.init()
         game_app.games.clear()
         self.first = game_app.socketio.test_client(game_app.app)
         self.second = game_app.socketio.test_client(game_app.app)
@@ -15,11 +22,17 @@ class PublishedAppTests(unittest.TestCase):
         self.first.disconnect()
         self.second.disconnect()
         game_app.games.clear()
+        game_app.database = self.original_database
+        self.database_dir.cleanup()
 
     def test_health_and_home_routes(self):
         client = game_app.app.test_client()
         self.assertEqual(client.get("/healthz").json, {"status": "ok"})
         self.assertEqual(client.get("/").status_code, 200)
+        self.assertEqual(
+            client.get("/static/vendor/socket.io.min.js").status_code,
+            200,
+        )
 
     def test_room_game_and_rematch(self):
         self.first.emit("join_game", {"name": "Alice"})
@@ -76,9 +89,70 @@ class PublishedAppTests(unittest.TestCase):
         self.assertEqual(finished["word"], "cœur")
         self.assertEqual(game["state"], "finished")
 
+    def test_room_chat_is_broadcast_to_both_players(self):
+        self.first.emit("join_game", {"name": "Alice"})
+        first_join = next(
+            event for event in self.first.get_received() if event["name"] == "joined_game"
+        )
+        room_id = first_join["args"][0]["room_id"]
+        self.second.emit("join_game", {"name": "Bob", "room_id": room_id})
+        self.second.get_received()
+
+        self.first.emit(
+            "chat_message",
+            {"room_id": room_id, "message": "  Bonne   chance !  "},
+        )
+        first_chat = next(
+            event for event in self.first.get_received() if event["name"] == "chat_message"
+        )
+        second_chat = next(
+            event for event in self.second.get_received() if event["name"] == "chat_message"
+        )
+        self.assertEqual(first_chat["args"][0]["message"], "Bonne chance !")
+        self.assertEqual(first_chat["args"][0], second_chat["args"][0])
+
+    def test_multiplayer_joker_reveals_a_letter_and_costs_points(self):
+        client = game_app.app.test_client()
+        token = client.post("/api/profile", json={"nickname": "Joker"}).json["token"]
+        with patch("app.secrets.choice", side_effect=lambda values: values[0]):
+            self.first.emit("join_game", {"name": "Alice"})
+            first_join = next(
+                event for event in self.first.get_received() if event["name"] == "joined_game"
+            )
+            room_id = first_join["args"][0]["room_id"]
+            first_sid = first_join["args"][0]["player_id"]
+            self.second.emit("join_game", {"name": "Joker", "token": token, "room_id": room_id})
+            second_join = next(
+                event for event in self.second.get_received() if event["name"] == "joined_game"
+            )
+            second_sid = second_join["args"][0]["player_id"]
+            game = game_app.games[room_id]
+            self.assertEqual(game["chooser"], first_sid)
+            self.assertEqual(game["guesser"], second_sid)
+
+            self.first.emit("submit_word", {"room_id": room_id, "word": "chat"})
+            self.second.emit("use_hint", {"room_id": room_id})
+            self.assertEqual(game["hints_used"], 1)
+            for letter in "chat":
+                if letter not in game["guessed_letters"]:
+                    self.second.emit("guess_letter", {"room_id": room_id, "letter": letter})
+
+            second_events = self.second.get_received()
+            result = next(
+                event["args"][0]
+                for event in second_events
+                if event["name"] == "profile_updated"
+            )
+            self.assertEqual(result["match"]["hint_penalty"], 30)
+            self.assertEqual(result["profile"]["current_streak"], 0)
+
 
 class NewGameModeTests(unittest.TestCase):
     def setUp(self):
+        self.original_database = game_app.database
+        self.database_dir = tempfile.TemporaryDirectory()
+        game_app.database = Database(Path(self.database_dir.name) / "test.sqlite3")
+        game_app.database.init()
         game_app.games.clear()
         game_app.bot_games.clear()
         self.http = game_app.app.test_client()
@@ -91,6 +165,8 @@ class NewGameModeTests(unittest.TestCase):
         self.socket.disconnect()
         game_app.games.clear()
         game_app.bot_games.clear()
+        game_app.database = self.original_database
+        self.database_dir.cleanup()
 
     def test_profile_and_game_data_api(self):
         restored = self.http.post(
@@ -103,6 +179,35 @@ class NewGameModeTests(unittest.TestCase):
             self.http.get("/api/leaderboard").status_code,
             200,
         )
+
+    def test_same_profile_can_rejoin_a_full_room_after_socket_reconnect(self):
+        opponent = game_app.socketio.test_client(game_app.app)
+        replacement = game_app.socketio.test_client(game_app.app)
+        try:
+            self.socket.emit("join_game", {"token": self.token, "name": "BotTest"})
+            joined = next(
+                event for event in self.socket.get_received() if event["name"] == "joined_game"
+            )
+            room_id = joined["args"][0]["room_id"]
+            old_sid = joined["args"][0]["player_id"]
+            opponent.emit("join_game", {"name": "Ami", "room_id": room_id})
+            opponent.get_received()
+
+            replacement.emit(
+                "join_game", {"token": self.token, "name": "BotTest", "room_id": room_id}
+            )
+            events = replacement.get_received()
+            resumed = next(event for event in events if event["name"] == "joined_game")
+            new_sid = resumed["args"][0]["player_id"]
+            game = game_app.games[room_id]
+            self.assertNotEqual(new_sid, old_sid)
+            self.assertNotIn(old_sid, game["players"])
+            self.assertEqual(len(game["players"]), 2)
+            self.assertEqual(game["players"][new_sid]["token"], self.token)
+            self.assertIn(game["state"], {"choosing", "playing"})
+        finally:
+            replacement.disconnect()
+            opponent.disconnect()
 
     def test_solo_bot_never_sends_secret_before_game_over(self):
         self.socket.emit(

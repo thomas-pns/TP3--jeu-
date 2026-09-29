@@ -8,6 +8,7 @@ import secrets
 import threading
 import time
 import unicodedata
+from functools import wraps
 
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -34,6 +35,15 @@ games = {}
 bot_games = {}
 state_lock = threading.RLock()
 database.init()
+
+
+def synchronized(handler):
+    @wraps(handler)
+    def wrapper(*args, **kwargs):
+        with state_lock:
+            return handler(*args, **kwargs)
+
+    return wrapper
 
 
 def _word_graphemes(word: str) -> list[str]:
@@ -75,7 +85,15 @@ def _difficulty_for_word(word: str) -> str:
     return "nightmare"
 
 
-def _record_profile_result(player: dict, *, won: bool, difficulty: str, errors: int, started_at: float):
+def _record_profile_result(
+    player: dict,
+    *,
+    won: bool,
+    difficulty: str,
+    errors: int,
+    started_at: float,
+    hints_used: int = 0,
+):
     token = player.get("token")
     if not token:
         return None
@@ -85,6 +103,7 @@ def _record_profile_result(player: dict, *, won: bool, difficulty: str, errors: 
         errors=errors,
         elapsed_seconds=max(0, time.time() - started_at),
         won=won,
+        hints_used=hints_used,
     )
 
 
@@ -113,6 +132,7 @@ def _reset_round(game):
         chooser=None,
         guesser=None,
         started_at=None,
+        hints_used=0,
         rematch_votes=set(),
     )
 
@@ -134,6 +154,7 @@ def _start_round(room_id, game, chooser_sid):
         chooser=chooser_sid,
         guesser=guesser_sid,
         started_at=None,
+        hints_used=0,
         rematch_votes=set(),
         round=game.get("round", 0) + 1,
     )
@@ -166,6 +187,7 @@ def _finish_round(room_id, game, winner_sid):
             difficulty=difficulty,
             errors=game["errors"],
             started_at=started_at,
+            hints_used=game["hints_used"] if sid == game["guesser"] else 0,
         )
         if result:
             socketio.emit(
@@ -285,6 +307,7 @@ def handle_connect(auth=None):
 
 
 @socketio.on("disconnect")
+@synchronized
 def handle_disconnect(reason=None):
     sid = request.sid
     with state_lock:
@@ -296,6 +319,7 @@ def handle_disconnect(reason=None):
 
 
 @socketio.on("join_game")
+@synchronized
 def handle_join_game(data):
     if not isinstance(data, dict):
         _error("Données de connexion invalides.")
@@ -322,6 +346,24 @@ def handle_join_game(data):
     with state_lock:
         room_id = requested_room or _new_room_id()
         game = games.get(room_id)
+        resumed_player = None
+        stale_sid = None
+        if game and token:
+            stale_sid = next(
+                (
+                    player_sid
+                    for player_sid, player in game["players"].items()
+                    if player.get("token") == token
+                ),
+                None,
+            )
+            if stale_sid:
+                resumed_player = game["players"].pop(stale_sid)
+                leave_room(room_id, sid=stale_sid)
+                _reset_round(game)
+                remaining = next(iter(game["players"]), None)
+                if remaining:
+                    socketio.emit("opponent_left", to=remaining)
         if game and len(game["players"]) >= 2:
             emit("game_full")
             return
@@ -336,10 +378,11 @@ def handle_join_game(data):
             games[room_id] = game
 
         join_room(room_id)
-        game["players"][sid] = {
+        game["players"][sid] = resumed_player or {
             "name": name,
             "score": 0,
             "token": token,
+            "last_chat_at": 0.0,
         }
         emit(
             "joined_game",
@@ -363,6 +406,7 @@ def handle_join_game(data):
 
 
 @socketio.on("submit_word")
+@synchronized
 def handle_submit_word(data):
     if not isinstance(data, dict):
         _error("Données de mot invalides.")
@@ -395,6 +439,7 @@ def handle_submit_word(data):
         guessed_letters=set(),
         errors=0,
         started_at=time.time(),
+        hints_used=0,
     )
     socketio.emit(
         "word_set",
@@ -406,6 +451,7 @@ def handle_submit_word(data):
 
 
 @socketio.on("guess_letter")
+@synchronized
 def handle_guess_letter(data):
     if not isinstance(data, dict):
         _error("Données de lettre invalides.")
@@ -466,7 +512,56 @@ def handle_guess_letter(data):
         _finish_round(room_id, game, game["chooser"])
 
 
+@socketio.on("use_hint")
+@synchronized
+def handle_use_hint(data):
+    if not isinstance(data, dict):
+        _error("Données de joker invalides.")
+        return
+    sid = request.sid
+    room_id = str(data.get("room_id", ""))
+    game = games.get(room_id)
+    if not game or sid not in game["players"]:
+        _error("Salle introuvable.")
+        return
+    if game["state"] != "playing" or sid != game.get("guesser"):
+        _error("Le joker est disponible uniquement pendant ton tour.")
+        return
+
+    hidden_letters = {
+        character
+        for index, key in enumerate(game["word_keys"])
+        if game["masked"][index] is None
+        for character in key
+        if len(character) == 1 and character not in game["guessed_letters"]
+    }
+    if not hidden_letters:
+        _error("Il ne reste aucune lettre à révéler.")
+        return
+    letter = secrets.choice(sorted(hidden_letters))
+    game["guessed_letters"].add(letter)
+    game["hints_used"] += 1
+    graphemes = _word_graphemes(game["word"])
+    for index, key in enumerate(game["word_keys"]):
+        if letter in key:
+            game["masked"][index] = graphemes[index]
+    socketio.emit(
+        "hint_used",
+        {
+            "letter": letter,
+            "masked": _masked_text(game["masked"]),
+            "errors": game["errors"],
+            "guessed_letters": sorted(game["guessed_letters"]),
+            "hints_used": game["hints_used"],
+        },
+        to=room_id,
+    )
+    if all(game["masked"]):
+        _finish_round(room_id, game, game["guesser"])
+
+
 @socketio.on("play_again")
+@synchronized
 def handle_play_again(data):
     if not isinstance(data, dict):
         _error("Données de revanche invalides.")
@@ -494,6 +589,7 @@ def handle_play_again(data):
 
 
 @socketio.on("leave_room")
+@synchronized
 def handle_leave_room(data):
     if not isinstance(data, dict):
         return
@@ -502,6 +598,34 @@ def handle_leave_room(data):
     if room_id and sid in games.get(room_id, {}).get("players", {}):
         leave_room(room_id)
         _remove_player(room_id, sid)
+
+
+@socketio.on("chat_message")
+@synchronized
+def handle_chat_message(data):
+    if not isinstance(data, dict):
+        return
+    sid = request.sid
+    room_id = str(data.get("room_id", ""))
+    game = games.get(room_id)
+    player = game.get("players", {}).get(sid) if game else None
+    message = data.get("message")
+    if not player or not isinstance(message, str):
+        _error("Tu ne peux pas écrire dans cette salle.")
+        return
+    message = " ".join(message.split())
+    if not message or len(message) > 140:
+        _error("Le message doit contenir de 1 à 140 caractères.")
+        return
+    now = time.monotonic()
+    if now - player["last_chat_at"] < 0.45:
+        return
+    player["last_chat_at"] = now
+    socketio.emit(
+        "chat_message",
+        {"name": player["name"], "message": message},
+        to=room_id,
+    )
 
 
 def _create_bot_match(sid: str, data: dict) -> tuple[dict | None, str | None]:
@@ -559,6 +683,7 @@ def _create_bot_match(sid: str, data: dict) -> tuple[dict | None, str | None]:
 
 
 @socketio.on("start_bot_game")
+@synchronized
 def handle_start_bot_game(data):
     if not isinstance(data, dict):
         _error("Données de partie invalides.")
@@ -589,6 +714,7 @@ def handle_start_bot_game(data):
 
 
 @socketio.on("submit_bot_word")
+@synchronized
 def handle_submit_bot_word(data):
     if not isinstance(data, dict):
         _error("Données de mot invalides.")
@@ -666,6 +792,7 @@ def _finish_bot_game(sid: str, won: bool):
 
 
 @socketio.on("bot_guess_letter")
+@synchronized
 def handle_bot_guess_letter(data):
     if not isinstance(data, dict):
         _error("Données de lettre invalides.")
@@ -726,6 +853,7 @@ def handle_bot_guess_letter(data):
 
 
 @socketio.on("bot_hint")
+@synchronized
 def handle_bot_hint(data):
     sid = request.sid
     game = bot_games.get(sid)
@@ -767,6 +895,7 @@ def handle_bot_hint(data):
 
 
 @socketio.on("bot_duel_guess")
+@synchronized
 def handle_bot_duel_guess(data):
     if not isinstance(data, dict):
         _error("Données de lettre invalides.")
@@ -871,6 +1000,7 @@ def _run_bot_duel_turn(sid: str):
 
 
 @socketio.on("leave_bot_game")
+@synchronized
 def handle_leave_bot_game():
     bot_games.pop(request.sid, None)
 
