@@ -1,20 +1,20 @@
 import random as r
-import json 
+import json
+from pathlib import Path
 
 class fonctions():
     def __init__(self):
         pass
 
+BASE_DIR = Path(__file__).resolve().parent
 mots=[]
 joueurs=[]
 
-with open("mots.json") as file: 
+with open(BASE_DIR / "mots.json", encoding="utf-8") as file:
     mots=json.load(file)
-file.close()
 
-with open("bdd.json") as file: 
+with open(BASE_DIR / "bdd.json", encoding="utf-8") as file:
     joueurs=json.load(file)
-file.close()
 
 def login():
     identifiant=input("Quel est ton identifiant ? \n")
@@ -26,9 +26,8 @@ def login():
         print(f"Ton identifiant n'existe pas, on va le créer !")
         new_joueur={"identifiant":identifiant,"streak":0,"historique":[]}
         joueurs["joueurs"].append(new_joueur)
-        with open("bdd.json", "w") as file:
+        with open(BASE_DIR / "bdd.json", "w", encoding="utf-8") as file:
             json.dump(joueurs, file, indent=4)
-        file.close()
         return new_joueur
 
 def affiche_mot(list):
@@ -105,9 +104,8 @@ def add_statistic(joueur, win, tentatives_restantes, mot_choice, lettres_use):
         joueur["streak"]=0
         joueur["historique"].append({"mot":mot_choice,"win":False,"tentatives_restantes":tentatives_restantes,"lettres_use":lettres_use})
 
-    with open("bdd.json", "w") as file:
+    with open(BASE_DIR / "bdd.json", "w", encoding="utf-8") as file:
         json.dump(joueurs, file, indent=4)
-    file.close()
 
 def jeu(cheat_mode, essais, joueur):
 
