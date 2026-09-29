@@ -1,0 +1,50 @@
+﻿<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Le Pendu Multijoueur</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div id="container">
+        <h1>Le Pendu Multijoueur</h1>
+        <div id="login-screen">
+            <input type="text" id="username" placeholder="Votre nom" />
+            <input type="text" id="room-id" placeholder="ID de la salle (optionnel)" />
+            <button id="join-btn">Rejoindre / Créer une salle</button>
+        </div>
+        <div id="game-screen" style="display:none;">
+            <div id="waiting">
+                <p>En attente d'un autre joueur...</p>
+                <p>ID de la salle : <span id="room-display"></span></p>
+            </div>
+            <div id="choose-word" style="display:none;">
+                <p>Joueur 1 : Choisissez un mot à faire deviner (lettres uniquement, longueur ≥ 3)</p>
+                <input type="text" id="word-input" placeholder="Mot secret" />
+                <button id="submit-word">Valider le mot</button>
+            </div>
+            <div id="playing" style="display:none;">
+                <div id="hangman-img">
+                    <!-- Images will be loaded dynamically -->
+                </div>
+                <div id="word-display"></div>
+                <div id="guessed-letters"></div>
+                <div id="remaining-attempts"></div>
+                <div id="message"></div>
+                <input type="text" id="letter-input" maxlength="1" placeholder="Une lettre" />
+                <button id="guess-btn">Proposer</button>
+            </div>
+            <div id="game-over" style="display:none;">
+                <h2 id="game-over-title"></h2>
+                <p id="game-over-word"></p>
+                <p>Scores : <span id="scores"></span></p>
+                <button id="play-again">Rejouer</button>
+                <button id="leave-room">Quitter la salle</button>
+            </div>
+        </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="{{ url_for('static', filename='js/game.js') }}"></script>
+</body>
+</html>

@@ -2,7 +2,7 @@
     "joueurs": [
         {
             "identifiant": "thomas",
-            "streak": 2,
+            "streak": 5,
             "historique": [
                 {
                     "mot": "professeur",
@@ -58,6 +58,45 @@
                         "b",
                         "l",
                         "e"
+                    ]
+                },
+                {
+                    "mot": "lettre",
+                    "win": true,
+                    "tentatives_restantes": 7,
+                    "lettres_utilisees": [
+                        "a",
+                        "t",
+                        "e",
+                        "r"
+                    ]
+                },
+                {
+                    "mot": "lecture",
+                    "win": true,
+                    "tentatives_restantes": 5,
+                    "lettres_utilisees": [
+                        "a",
+                        "f",
+                        "t",
+                        "e",
+                        "r",
+                        "i",
+                        "u",
+                        "c"
+                    ]
+                },
+                {
+                    "mot": "thomass",
+                    "win": true,
+                    "tentatives_restantes": 8,
+                    "lettres_utilisees": [
+                        "t",
+                        "h",
+                        "o",
+                        "m",
+                        "a",
+                        "s"
                     ]
                 }
             ]
