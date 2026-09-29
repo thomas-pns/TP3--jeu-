@@ -1,50 +1,265 @@
-﻿<!DOCTYPE html>
+<!doctype html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Le Pendu Multijoueur</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#111126">
+    <meta name="description" content="Le pendu le plus loufoque : défie des bots, tes amis et deviens une légende des mots.">
+    <title>Motus Maximus — Le pendu qui a du répondant</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
-    <div id="container">
-        <h1>Le Pendu Multijoueur</h1>
-        <div id="login-screen">
-            <input type="text" id="username" placeholder="Votre nom" />
-            <input type="text" id="room-id" placeholder="ID de la salle (optionnel)" />
-            <button id="join-btn">Rejoindre / Créer une salle</button>
-        </div>
-        <div id="game-screen" style="display:none;">
-            <div id="waiting">
-                <p>En attente d'un autre joueur...</p>
-                <p>ID de la salle : <span id="room-display"></span></p>
-            </div>
-            <div id="choose-word" style="display:none;">
-                <p>Joueur 1 : Choisissez un mot à faire deviner (lettres uniquement, longueur ≥ 3)</p>
-                <input type="text" id="word-input" placeholder="Mot secret" />
-                <button id="submit-word">Valider le mot</button>
-            </div>
-            <div id="playing" style="display:none;">
-                <div id="hangman-img">
-                    <!-- Images will be loaded dynamically -->
-                </div>
-                <div id="word-display"></div>
-                <div id="guessed-letters"></div>
-                <div id="remaining-attempts"></div>
-                <div id="message"></div>
-                <input type="text" id="letter-input" maxlength="1" placeholder="Une lettre" />
-                <button id="guess-btn">Proposer</button>
-            </div>
-            <div id="game-over" style="display:none;">
-                <h2 id="game-over-title"></h2>
-                <p id="game-over-word"></p>
-                <p>Scores : <span id="scores"></span></p>
-                <button id="play-again">Rejouer</button>
-                <button id="leave-room">Quitter la salle</button>
-            </div>
-        </div>
+    <div class="backdrop" aria-hidden="true">
+        <span class="orb orb-one"></span>
+        <span class="orb orb-two"></span>
+        <span class="orb orb-three"></span>
+        <div class="starfield"></div>
     </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script src="{{ url_for('static', filename='js/game.js') }}"></script>
+
+    <div class="app-shell">
+        <header class="topbar">
+            <a class="brand" href="/" aria-label="Motus Maximus, accueil">
+                <span class="brand-mark" aria-hidden="true">
+                    <svg viewBox="0 0 48 48">
+                        <path d="M9 40h30M15 40V8h19M34 8v7" />
+                        <circle cx="34" cy="21" r="5" />
+                        <path d="M34 26v10m0-6-7 5m7-5 7 5m-7 1-5 8m5-8 5 8" />
+                    </svg>
+                </span>
+                <span class="brand-copy"><strong>MOTUS</strong><em>MAXIMUS</em></span>
+            </a>
+
+            <nav class="top-nav" aria-label="Menu principal">
+                <button class="nav-button active" type="button" data-open-panel="home">Jouer</button>
+                <button class="nav-button" type="button" data-open-panel="leaderboard">Classement</button>
+                <button class="nav-button" type="button" data-open-panel="characters">Personnages</button>
+                <button class="nav-button" type="button" data-open-panel="achievements">Succès</button>
+            </nav>
+
+            <div class="header-actions">
+                <button id="sound-toggle" class="icon-button" type="button" aria-label="Désactiver le son" title="Son">
+                    <svg class="sound-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Zm12.5-.5a5 5 0 0 1 0 7m2.5-9.5a9 9 0 0 1 0 12" /></svg>
+                    <svg class="sound-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4Zm12 1 5 5m0-5-5 5" /></svg>
+                </button>
+                <label class="volume-control" title="Volume des effets sonores">
+                    <span class="visually-hidden">Volume</span>
+                    <input id="volume-slider" type="range" min="0" max="100" value="55" aria-label="Volume des effets sonores">
+                </label>
+                <button id="profile-button" class="profile-chip" type="button" data-open-panel="profile" aria-label="Mon profil">
+                    <span class="profile-chip-avatar" id="profile-avatar">?</span>
+                    <span class="profile-chip-copy"><strong id="profile-name">Invité</strong><small id="profile-rank">Apprenti</small></span>
+                    <span class="profile-chip-chevron" aria-hidden="true">⌄</span>
+                </button>
+            </div>
+        </header>
+
+        <main>
+            <section id="home-view" class="view active" aria-labelledby="hero-title">
+                <div class="hero-grid">
+                    <div class="hero-copy">
+                        <div class="eyebrow"><span class="eyebrow-dot"></span> LE JEU DE MOTS QUI A DU RÉPONDANT</div>
+                        <h1 id="hero-title">Un mot.<br><span>Huit erreurs.</span><br>La gloire.</h1>
+                        <p class="hero-description">Déjoue les bots, défie tes amis et enchaîne les victoires. Le dictionnaire n’a qu’à bien se tenir.</p>
+                        <div class="hero-cta">
+                            <a href="#play-panel" class="button button-primary button-large"><span>À toi de jouer</span><span aria-hidden="true">↘</span></a>
+                            <span class="hero-note"><span class="live-dot"></span> Multijoueur en ligne</span>
+                        </div>
+                        <div class="hero-proof">
+                            <div class="proof-avatars" aria-hidden="true"><span>🏴‍☠️</span><span>🤖</span><span>🧑‍🚀</span><span>＋</span></div>
+                            <p><strong>6 personnages</strong><br>et des mots à l’infini</p>
+                        </div>
+                    </div>
+
+                    <div class="hero-art" aria-label="Personnage pirate cartoon">
+                        <div class="hero-spark spark-a">✦</div>
+                        <div class="hero-spark spark-b">✧</div>
+                        <div class="hero-sticker sticker-combo"><span>STREAK</span><strong>×3</strong><i>🔥</i></div>
+                        <div class="hero-sticker sticker-word"><span>MOT DU JOUR</span><strong>?</strong><small>À toi de trouver</small></div>
+                        <div class="hero-character-wrap">
+                            <div id="hero-character" class="hero-character"></div>
+                            <div class="hero-platform"></div>
+                        </div>
+                        <div class="hero-caption"><span class="caption-line"></span><span id="hero-caption-name">Capitaine Moustache</span><span class="caption-line"></span></div>
+                    </div>
+                </div>
+
+                <div id="profile-setup" class="profile-setup card" hidden>
+                    <div class="setup-icon" aria-hidden="true">✦</div>
+                    <div class="setup-copy">
+                        <strong>Choisis ton nom de légende</strong>
+                        <span>Ta progression sera sauvegardée sur cet appareil.</span>
+                    </div>
+                    <form id="profile-form" class="setup-form">
+                        <label class="visually-hidden" for="nickname-input">Ton pseudo</label>
+                        <input id="nickname-input" name="nickname" maxlength="20" autocomplete="nickname" placeholder="Ex. Zoé la futée" required>
+                        <button class="button button-primary" type="submit">C’est parti <span aria-hidden="true">→</span></button>
+                    </form>
+                </div>
+
+                <section id="play-panel" class="play-section" aria-labelledby="play-title">
+                    <div class="section-heading">
+                        <div><span class="section-kicker">CHOISIS TON TERRAIN</span><h2 id="play-title">Comment on joue ?</h2></div>
+                        <span class="section-index">01 / 03</span>
+                    </div>
+
+                    <div class="mode-grid">
+                        <article class="mode-card bot-mode-card">
+                            <div class="mode-card-top">
+                                <span class="mode-icon bot-icon" aria-hidden="true">✳</span>
+                                <span class="mode-tag">SOLO • À TON RYTHME</span>
+                            </div>
+                            <h3>Défie un bot</h3>
+                            <p>Cinq adversaires, cinq caractères. Du gentil débutant au Boss qui cache des mots-pièges.</p>
+                            <div id="bot-grid" class="bot-grid" aria-label="Choisir un adversaire"></div>
+                            <div class="mode-actions">
+                                <button id="start-bot-btn" class="button button-primary" type="button" disabled>Jouer contre le bot <span aria-hidden="true">→</span></button>
+                                <button id="start-duel-btn" class="button button-secondary" type="button" disabled>Mode duel <span aria-hidden="true">↗</span></button>
+                            </div>
+                            <p class="mode-footnote"><span class="tiny-lock">♟</span> En duel, vous devinez chacun le mot de l’autre.</p>
+                        </article>
+
+                        <article class="mode-card friend-mode-card">
+                            <div class="mode-card-top">
+                                <span class="mode-icon friend-icon" aria-hidden="true">↗</span>
+                                <span class="mode-tag">2 JOUEURS • EN TEMPS RÉEL</span>
+                            </div>
+                            <h3>Invite un ami</h3>
+                            <p>Crée une salle privée et partage son code. À tour de rôle, choisissez un mot et faites-vous transpirer.</p>
+                            <div class="room-form">
+                                <label for="room-input">CODE DE SALLE <span>(facultatif)</span></label>
+                                <input id="room-input" name="room" maxlength="50" autocomplete="off" placeholder="Créer une nouvelle salle">
+                                <button id="join-room-btn" class="button button-light" type="button">Créer / rejoindre la salle <span aria-hidden="true">→</span></button>
+                            </div>
+                            <div class="friend-card-footer"><span class="online-pulse"></span> Les salles privées n’attendent que vous</div>
+                        </article>
+                    </div>
+                </section>
+
+                <section class="progress-section" aria-label="Ta progression">
+                    <div class="progress-card rank-card">
+                        <div class="progress-card-label"><span>TON RANG</span><span class="rank-spark">✦</span></div>
+                        <div class="rank-line"><strong id="rank-title">Apprenti</strong><span id="rank-next">Prochain : Devineur</span></div>
+                        <div class="xp-track"><span id="xp-progress"></span></div>
+                        <div class="xp-caption"><span id="xp-current">0 XP</span><span id="xp-target">250 XP</span></div>
+                    </div>
+                    <div class="progress-card mini-stat"><span class="stat-glyph flame-glyph">♨</span><span class="mini-stat-label">MEILLEUR STREAK</span><strong><span id="best-streak">0</span><small> victoires</small></strong></div>
+                    <div class="progress-card mini-stat"><span class="stat-glyph star-glyph">✦</span><span class="mini-stat-label">SCORE TOTAL</span><strong id="total-score">0</strong></div>
+                    <div class="progress-card mini-stat"><span class="stat-glyph win-glyph">✓</span><span class="mini-stat-label">VICTOIRES</span><strong id="total-wins">0</strong></div>
+                </section>
+            </section>
+
+            <section id="game-view" class="view game-view" aria-label="Partie en cours" hidden>
+                <div class="game-topline">
+                    <button id="leave-game-btn" class="back-button" type="button"><span aria-hidden="true">←</span> Quitter</button>
+                    <div class="game-meta">
+                        <span id="game-mode-label" class="game-mode-pill">SOLO</span>
+                        <span id="room-code-label" class="room-code-pill" hidden>CODE <strong id="room-code"></strong><button id="copy-room-btn" type="button" aria-label="Copier le code de salle">▢</button></span>
+                    </div>
+                    <div class="round-counter"><span class="round-dot"></span><span id="round-number">MANCHE 01</span></div>
+                </div>
+
+                <div class="game-layout">
+                    <section class="arena-card card">
+                        <div class="arena-header">
+                            <div><span id="game-eyebrow" class="section-kicker">LE MOT MYSTÈRE</span><h2 id="game-title">Garde ton sang-froid</h2></div>
+                            <div class="arena-tags"><span id="game-category" class="category-pill">Mots surprises</span><span id="game-difficulty" class="difficulty-pill">MOYEN</span></div>
+                        </div>
+
+                        <div class="character-stage" id="character-stage">
+                            <div class="stage-glow"></div>
+                            <div class="stage-stars" aria-hidden="true"><i>✦</i><i>·</i><i>✧</i><i>·</i></div>
+                            <div id="character-art" class="character-art"></div>
+                            <div id="character-bubble" class="character-bubble" role="status" aria-live="polite">À toi de jouer !</div>
+                            <div id="stage-floor" class="stage-floor"></div>
+                            <div id="streak-flame" class="streak-flame" hidden><span>🔥</span><strong id="streak-count">0</strong><small>STREAK</small></div>
+                        </div>
+
+                        <div class="word-zone">
+                            <div class="word-zone-top"><span>LE MOT À DEVINER</span><span id="word-length-label">0 LETTRES</span></div>
+                            <div id="word-mask" class="word-mask" aria-label="Mot à deviner"></div>
+                            <div id="round-message" class="round-message" aria-live="polite">En attente du prochain défi…</div>
+                        </div>
+
+                        <div class="attempts-row">
+                            <div><span class="attempts-label">TES CHANCES</span><strong id="attempts-label">8 restantes</strong></div>
+                            <div id="attempt-pips" class="attempt-pips" aria-label="8 tentatives restantes"></div>
+                        </div>
+
+                        <div class="keyboard-panel">
+                            <div class="keyboard-heading"><span>CHOISIS UNE LETTRE</span><span class="keyboard-hint">ou tape au clavier</span></div>
+                            <div id="keyboard" class="keyboard" role="group" aria-label="Clavier des lettres"></div>
+                        </div>
+
+                        <div class="game-tools">
+                            <button id="hint-btn" class="button button-joker" type="button" hidden><span aria-hidden="true">✦</span> Joker <small>−30 pts • casse le streak</small></button>
+                            <span id="guessed-letters" class="guessed-letters"></span>
+                        </div>
+
+                        <form id="secret-word-form" class="secret-word-form" hidden>
+                            <label for="secret-word-input">CHOISIS UN MOT SECRET <span>3 à 30 lettres, accents acceptés</span></label>
+                            <div class="secret-word-row"><input id="secret-word-input" maxlength="30" autocomplete="off" placeholder="Ton mot le plus malin…" required><button class="button button-primary" type="submit">Verrouiller <span aria-hidden="true">→</span></button></div>
+                        </form>
+                        <form id="duel-word-form" class="secret-word-form" hidden>
+                            <label for="duel-word-input">CHOISIS TON MOT SECRET <span>Le bot va essayer de le trouver !</span></label>
+                            <div class="secret-word-row"><input id="duel-word-input" maxlength="30" autocomplete="off" placeholder="Un mot bien corsé…" required><button class="button button-primary" type="submit">Lancer le duel <span aria-hidden="true">→</span></button></div>
+                        </form>
+                    </section>
+
+                    <aside class="side-column">
+                        <section class="opponent-card card">
+                            <div class="opponent-head"><span class="section-kicker">TON ADVERSAIRE</span><span class="opponent-live"><i></i> EN LIGNE</span></div>
+                            <div class="opponent-profile"><div id="opponent-avatar" class="opponent-avatar">?</div><div><strong id="opponent-name">En attente…</strong><small id="opponent-description">Prêt à jouer</small></div></div>
+                            <div id="bot-progress-box" class="bot-progress-box" hidden><div class="bot-progress-heading"><span>Le bot devine ton mot</span><strong id="bot-errors-label">8 essais</strong></div><div id="bot-word-mask" class="bot-word-mask"></div></div>
+                        </section>
+                        <section class="chat-card card">
+                            <div class="chat-head"><div><span class="section-kicker">LE PETIT SALON</span><h3>Ça chambre 👀</h3></div><span class="chat-count" id="chat-count">0</span></div>
+                            <div id="chat-log" class="chat-log" role="log" aria-live="polite"><p class="chat-empty">Les meilleures punchlines arrivent…</p></div>
+                            <form id="chat-form" class="chat-form" hidden><label class="visually-hidden" for="chat-input">Écrire un message</label><input id="chat-input" maxlength="140" placeholder="Ton message…"><button type="submit" aria-label="Envoyer">↑</button></form>
+                        </section>
+                        <section class="tip-card"><span aria-hidden="true">✦</span><p><strong>Astuce de pro</strong><br>Commence par les voyelles, puis écoute ton instinct de détective.</p></section>
+                    </aside>
+                </div>
+            </section>
+        </main>
+
+        <footer class="site-footer"><span>© MOTUS MAXIMUS</span><span>FAIT AVEC DES MOTS, DU PANACHE ET UN PEU DE CHANCE.</span><span>VERSION 2.0</span></footer>
+    </div>
+
+    <dialog id="leaderboard-dialog" class="modal" aria-labelledby="leaderboard-title">
+        <div class="modal-header"><div><span class="section-kicker">LE HALL DES LÉGENDES</span><h2 id="leaderboard-title">Meilleurs devineurs</h2></div><button class="modal-close" type="button" data-close-dialog aria-label="Fermer">×</button></div>
+        <p class="modal-intro">Les plus belles séries de victoires du royaume.</p>
+        <div class="leaderboard-table"><div class="leaderboard-head"><span>#</span><span>JOUEUR</span><span>STREAK</span><span>SCORE</span></div><ol id="leaderboard-list"></ol></div>
+    </dialog>
+
+    <dialog id="characters-dialog" class="modal modal-wide" aria-labelledby="characters-title">
+        <div class="modal-header"><div><span class="section-kicker">CHOISIS TON ALLIÉ</span><h2 id="characters-title">La bande des improbables</h2></div><button class="modal-close" type="button" data-close-dialog aria-label="Fermer">×</button></div>
+        <p class="modal-intro">Joue avec un personnage. Enchaîne les victoires pour débloquer toute la bande.</p>
+        <div id="character-collection" class="character-collection"></div>
+    </dialog>
+
+    <dialog id="achievements-dialog" class="modal" aria-labelledby="achievements-title">
+        <div class="modal-header"><div><span class="section-kicker">BADGES DE PRESTIGE</span><h2 id="achievements-title">Ta collection</h2></div><button class="modal-close" type="button" data-close-dialog aria-label="Fermer">×</button></div>
+        <p class="modal-intro">Chaque exploit mérite son petit feu d’artifice.</p>
+        <div id="achievement-list" class="achievement-list"></div>
+    </dialog>
+
+    <dialog id="result-dialog" class="modal result-modal" aria-labelledby="result-title">
+        <div class="result-confetti" aria-hidden="true"></div>
+        <button class="modal-close" type="button" data-close-dialog aria-label="Fermer">×</button>
+        <div id="result-icon" class="result-icon">✦</div>
+        <span id="result-kicker" class="section-kicker">MANCHE TERMINÉE</span>
+        <h2 id="result-title">Bien joué !</h2>
+        <p id="result-subtitle" class="modal-intro"></p>
+        <div class="result-word-card"><span>LE MOT ÉTAIT</span><strong id="result-word"></strong><small id="result-definition"></small></div>
+        <div class="result-stats"><div><strong id="result-points">+0</strong><span>POINTS</span></div><div><strong id="result-streak">0</strong><span>STREAK</span></div><div><strong id="result-rank">Apprenti</strong><span>RANG</span></div></div>
+        <button id="next-round-btn" class="button button-primary button-large" type="button">Manche suivante <span aria-hidden="true">→</span></button>
+        <button id="result-home-btn" class="text-button" type="button">Retour à l’accueil</button>
+    </dialog>
+
+    <div id="toast-region" class="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <script src="{{ url_for('static', filename='vendor/socket.io.min.js') }}"></script>
+    <script type="module" src="{{ url_for('static', filename='js/game.js') }}"></script>
 </body>
 </html>

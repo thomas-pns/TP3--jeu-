@@ -11,6 +11,14 @@ def test_catalog_has_at_least_600_unique_words_and_150_nightmare_words():
     assert all(entry["category"] for entry in CATALOG)
 
 
+def test_nightmare_level_includes_rare_letter_challenges():
+    nightmare = [entry["normalized"] for entry in words_for("nightmare")]
+    assert any("w" in word for word in nightmare)
+    assert any("ph" in word for word in nightmare)
+    assert any("x" in word for word in nightmare)
+    assert any("y" in word for word in nightmare)
+
+
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
