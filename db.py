@@ -168,22 +168,28 @@ class Database:
         return self._public_profile(row) if row else None
 
     def recent_bot_words(
-        self, token: object, bot_id: str, limit: int = 20
+        self, token: object, bot_id: str | None = None, limit: int = 20
     ) -> list[str]:
-        if not isinstance(token, str) or not isinstance(bot_id, str):
+        if not isinstance(token, str) or (bot_id is not None and not isinstance(bot_id, str)):
             return []
         limit = max(1, min(int(limit), 100))
+        bot_filter = " AND history.bot_id = ?" if bot_id is not None else ""
+        parameters = (
+            (_token_hash(token), bot_id, limit)
+            if bot_id is not None
+            else (_token_hash(token), limit)
+        )
         with self._connection() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT history.normalized_word
                 FROM bot_history AS history
                 JOIN players ON players.id = history.player_id
-                WHERE players.token_hash = ? AND history.bot_id = ?
+                WHERE players.token_hash = ?{bot_filter}
                 ORDER BY history.id DESC
                 LIMIT ?
                 """,
-                (_token_hash(token), bot_id, limit),
+                parameters,
             ).fetchall()
         return [row["normalized_word"] for row in rows]
 

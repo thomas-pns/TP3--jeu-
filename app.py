@@ -646,7 +646,7 @@ def _create_bot_match(sid: str, data: dict) -> tuple[dict | None, str | None]:
             return None, "Quittez votre partie actuelle avant d'en commencer une autre."
 
         duel_count = database.bot_duel_count(token, bot_id)
-        recent_words = database.recent_bot_words(token, bot_id)
+        recent_words = database.recent_bot_words(token, limit=20)
         try:
             secret = choose_bot_word(
                 bot_id,
@@ -789,6 +789,7 @@ def _finish_bot_game(sid: str, won: bool):
     if result:
         payload.update(profile=result["profile"], match=result["match"])
     socketio.emit("bot_game_over", payload, to=sid)
+    bot_games.pop(sid, None)
 
 
 @socketio.on("bot_guess_letter")

@@ -120,3 +120,11 @@ def test_recent_bot_word_history_survives_database_reopen(store, tmp_path):
     reopened.init()
     assert reopened.bot_duel_count(token, "expert") == 2
     assert reopened.recent_bot_words(token, "expert") == ["xylophage", "paréidolie"]
+
+
+def test_recent_words_default_to_a_cross_bot_history(store):
+    token, _ = store.create_profile("MultiBot")
+    store.remember_bot_word(token, "beginner", "chat")
+    store.remember_bot_word(token, "expert", "xylophage")
+
+    assert store.recent_bot_words(token) == ["xylophage", "chat"]

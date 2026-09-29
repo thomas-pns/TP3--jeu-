@@ -150,6 +150,9 @@ def choose_bot_word(
     catalog = list(catalog)
     recent = {normalize_word(word) for word in recent_words}
 
+    if bot_id != "boss":
+        catalog = [entry for entry in catalog if not entry.get("trap")]
+
     if bot_id == "boss" and duel_count > 0 and duel_count % 10 == 0:
         traps = [
             entry

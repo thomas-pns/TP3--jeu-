@@ -91,6 +91,17 @@ def test_boss_uses_an_unseen_trap_on_every_tenth_duel():
     )["word"] == "chat"
 
 
+def test_only_the_boss_uses_reserved_trap_words():
+    catalog = [
+        entry("xylophage", difficulty="nightmare", trap=True),
+        entry("abstrus", difficulty="nightmare"),
+    ]
+    chosen = choose_bot_word(
+        "nightmare", catalog=catalog, rng=PredictableRandom()
+    )
+    assert chosen["word"] == "abstrus"
+
+
 def test_bot_filters_candidates_and_uses_letter_frequency():
     catalog = [entry("chat"), entry("char")]
     guess = choose_guess(

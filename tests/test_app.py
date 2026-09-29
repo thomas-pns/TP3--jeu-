@@ -221,6 +221,7 @@ class NewGameModeTests(unittest.TestCase):
         self.assertTrue(set(started["masked"].replace(" ", "")) <= {"_"})
 
         sid = next(iter(game_app.bot_games))
+        first_secret = game_app.bot_games[sid]["entry"]["word"]
         secret_keys = game_app.bot_games[sid]["word_keys"]
         letters = dict.fromkeys(letter for key in secret_keys for letter in key)
         for letter in letters:
@@ -228,8 +229,24 @@ class NewGameModeTests(unittest.TestCase):
         events = self.socket.get_received()
         ended = next(event["args"][0] for event in events if event["name"] == "bot_game_over")
         self.assertTrue(ended["won"])
-        self.assertEqual(ended["word"], game_app.bot_games[sid]["entry"]["word"])
+        self.assertEqual(ended["word"], first_secret)
         self.assertEqual(ended["profile"]["matches"], 1)
+        self.assertNotIn(sid, game_app.bot_games)
+
+        self.socket.emit(
+            "start_bot_game",
+            {"token": self.token, "bot_id": "beginner", "mode": "guess"},
+        )
+        next_round = next(
+            event
+            for event in self.socket.get_received()
+            if event["name"] == "bot_game_started"
+        )
+        self.assertNotIn("word", next_round["args"][0])
+        self.assertNotEqual(
+            next(iter(game_app.bot_games.values()))["entry"]["word"],
+            first_secret,
+        )
 
     def test_duel_submits_hidden_word_then_bot_takes_a_real_turn(self):
         self.socket.emit(
@@ -266,6 +283,36 @@ class NewGameModeTests(unittest.TestCase):
             if event["name"] == "bot_duel_update"
         )
         self.assertIn("letter", update)
+
+    def test_twenty_boss_rounds_never_repeat_and_each_tenth_is_a_trap(self):
+        seen = set()
+        for duel_number in range(1, 21):
+            self.socket.emit(
+                "start_bot_game",
+                {"token": self.token, "bot_id": "boss", "mode": "guess"},
+            )
+            self.socket.get_received()
+            sid = next(iter(game_app.bot_games))
+            game = game_app.bot_games[sid]
+            word = game["entry"]
+            self.assertNotIn(word["normalized"], seen)
+            seen.add(word["normalized"])
+            if duel_number % 10 == 0:
+                self.assertTrue(word["trap"])
+
+            letters = dict.fromkeys(
+                letter for key in game["word_keys"] for letter in key
+            )
+            for letter in letters:
+                self.socket.emit("bot_guess_letter", {"letter": letter})
+            ended = [
+                event
+                for event in self.socket.get_received()
+                if event["name"] == "bot_game_over"
+            ]
+            self.assertEqual(len(ended), 1)
+
+        self.assertEqual(len(seen), 20)
 
 
 if __name__ == "__main__":
