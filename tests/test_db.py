@@ -109,3 +109,14 @@ def test_losses_reset_streak_and_leaderboard_is_ranked(store):
     assert store.get_profile(top_token)["current_streak"] == 0
     assert store.get_profile(top_token)["best_streak"] == 3
     assert [entry["nickname"] for entry in store.leaderboard()] == ["Top", "Second"]
+
+
+def test_recent_bot_word_history_survives_database_reopen(store, tmp_path):
+    token, _ = store.create_profile("Collectionneur")
+    store.remember_bot_word(token, "expert", "paréidolie")
+    store.remember_bot_word(token, "expert", "xylophage")
+
+    reopened = Database(tmp_path / "profiles.sqlite3")
+    reopened.init()
+    assert reopened.bot_duel_count(token, "expert") == 2
+    assert reopened.recent_bot_words(token, "expert") == ["xylophage", "paréidolie"]

@@ -74,6 +74,7 @@ def test_boss_uses_an_unseen_trap_on_every_tenth_duel():
     catalog = [
         entry("chat", difficulty="nightmare"),
         entry("xylophage", difficulty="nightmare", trap=True),
+        entry("sphygmomanometre", difficulty="nightmare", trap=True),
     ]
     assert choose_bot_word(
         "boss", duel_count=10, catalog=catalog, rng=PredictableRandom()
@@ -84,6 +85,9 @@ def test_boss_uses_an_unseen_trap_on_every_tenth_duel():
         recent_words=["xylophage"],
         catalog=catalog,
         rng=PredictableRandom(),
+    )["word"] == "sphygmomanometre"
+    assert choose_bot_word(
+        "boss", duel_count=9, catalog=catalog, rng=PredictableRandom()
     )["word"] == "chat"
 
 
@@ -125,4 +129,3 @@ def test_bot_replies_and_human_like_delay_are_available():
     rng = PredictableRandom()
     assert bot_line("boss", rng=rng) in BOTS["boss"].taunts
     assert bot_delay("boss", rng=rng) == sum(BOTS["boss"].delay_seconds) / 2
-

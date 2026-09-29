@@ -1,4 +1,6 @@
 import unittest
+import time
+from unittest.mock import patch
 
 import app as game_app
 
@@ -48,6 +50,117 @@ class PublishedAppTests(unittest.TestCase):
         self.second.emit("play_again", {"room_id": room_id})
         self.assertEqual(game["state"], "choosing")
         self.assertEqual(game["chooser"], previous_guesser)
+
+    def test_multiplayer_keeps_accented_ligature_as_one_letter_position(self):
+        self.first.emit("join_game", {"name": "Alice"})
+        first_join = next(
+            event for event in self.first.get_received() if event["name"] == "joined_game"
+        )
+        room_id = first_join["args"][0]["room_id"]
+        first_sid = first_join["args"][0]["player_id"]
+        self.second.emit("join_game", {"name": "Bob", "room_id": room_id})
+        second_join = next(
+            event for event in self.second.get_received() if event["name"] == "joined_game"
+        )
+        second_sid = second_join["args"][0]["player_id"]
+        game = game_app.games[room_id]
+
+        chooser = self.first if game["chooser"] == first_sid else self.second
+        guesser = self.first if game["guesser"] == first_sid else self.second
+        chooser.emit("submit_word", {"room_id": room_id, "word": "cœur"})
+        for letter in "cour":
+            guesser.emit("guess_letter", {"room_id": room_id, "letter": letter})
+
+        events = guesser.get_received()
+        finished = next(event["args"][0] for event in events if event["name"] == "game_over")
+        self.assertEqual(finished["word"], "cœur")
+        self.assertEqual(game["state"], "finished")
+
+
+class NewGameModeTests(unittest.TestCase):
+    def setUp(self):
+        game_app.games.clear()
+        game_app.bot_games.clear()
+        self.http = game_app.app.test_client()
+        self.socket = game_app.socketio.test_client(game_app.app)
+        response = self.http.post("/api/profile", json={"nickname": "BotTest"})
+        self.assertEqual(response.status_code, 201)
+        self.token = response.json["token"]
+
+    def tearDown(self):
+        self.socket.disconnect()
+        game_app.games.clear()
+        game_app.bot_games.clear()
+
+    def test_profile_and_game_data_api(self):
+        restored = self.http.post(
+            "/api/profile", json={"token": self.token}
+        )
+        self.assertEqual(restored.status_code, 200)
+        self.assertEqual(restored.json["profile"]["nickname"], "BotTest")
+        self.assertEqual(len(self.http.get("/api/game-data").json["bots"]), 5)
+        self.assertEqual(
+            self.http.get("/api/leaderboard").status_code,
+            200,
+        )
+
+    def test_solo_bot_never_sends_secret_before_game_over(self):
+        self.socket.emit(
+            "start_bot_game",
+            {"token": self.token, "bot_id": "beginner", "mode": "guess"},
+        )
+        events = self.socket.get_received()
+        started = next(event["args"][0] for event in events if event["name"] == "bot_game_started")
+        self.assertNotIn("word", started)
+        self.assertNotIn("secret", started)
+        self.assertTrue(set(started["masked"].replace(" ", "")) <= {"_"})
+
+        sid = next(iter(game_app.bot_games))
+        secret_keys = game_app.bot_games[sid]["word_keys"]
+        letters = dict.fromkeys(letter for key in secret_keys for letter in key)
+        for letter in letters:
+            self.socket.emit("bot_guess_letter", {"letter": letter})
+        events = self.socket.get_received()
+        ended = next(event["args"][0] for event in events if event["name"] == "bot_game_over")
+        self.assertTrue(ended["won"])
+        self.assertEqual(ended["word"], game_app.bot_games[sid]["entry"]["word"])
+        self.assertEqual(ended["profile"]["matches"], 1)
+
+    def test_duel_submits_hidden_word_then_bot_takes_a_real_turn(self):
+        self.socket.emit(
+            "start_bot_game",
+            {"token": self.token, "bot_id": "beginner", "mode": "duel"},
+        )
+        start_events = self.socket.get_received()
+        self.assertTrue(any(event["name"] == "bot_word_required" for event in start_events))
+        started = next(
+            event["args"][0]
+            for event in start_events
+            if event["name"] == "bot_game_started"
+        )
+        self.assertNotIn("word", started)
+
+        self.socket.emit("submit_bot_word", {"word": "chat"})
+        self.assertTrue(
+            any(
+                event["name"] == "bot_duel_started"
+                for event in self.socket.get_received()
+            )
+        )
+        with patch("app.bot_delay", return_value=0):
+            self.socket.emit("bot_duel_guess", {"letter": "z"})
+            deadline = time.time() + 2
+            while time.time() < deadline:
+                if not game_app.bot_games[next(iter(game_app.bot_games))]["bot_turn_pending"]:
+                    break
+                time.sleep(0.01)
+            turn_events = self.socket.get_received()
+        update = next(
+            event["args"][0]
+            for event in turn_events
+            if event["name"] == "bot_duel_update"
+        )
+        self.assertIn("letter", update)
 
 
 if __name__ == "__main__":

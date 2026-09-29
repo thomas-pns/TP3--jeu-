@@ -88,6 +88,7 @@ class Database:
                     nickname TEXT NOT NULL,
                     xp INTEGER NOT NULL DEFAULT 0,
                     total_score INTEGER NOT NULL DEFAULT 0,
+                    matches INTEGER NOT NULL DEFAULT 0,
                     wins INTEGER NOT NULL DEFAULT 0,
                     current_streak INTEGER NOT NULL DEFAULT 0,
                     best_streak INTEGER NOT NULL DEFAULT 0,
@@ -99,9 +100,32 @@ class Database:
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(players)")
+            }
+            if "matches" not in columns:
+                connection.execute(
+                    "ALTER TABLE players ADD COLUMN matches INTEGER NOT NULL DEFAULT 0"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS players_leaderboard "
                 "ON players(best_streak DESC, total_score DESC)"
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS bot_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+                    bot_id TEXT NOT NULL,
+                    normalized_word TEXT NOT NULL,
+                    played_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS bot_history_recent "
+                "ON bot_history(player_id, bot_id, id DESC)"
             )
 
     @staticmethod
@@ -111,6 +135,7 @@ class Database:
             "nickname": row["nickname"],
             "xp": row["xp"],
             "total_score": row["total_score"],
+            "matches": row["matches"],
             "wins": row["wins"],
             "current_streak": row["current_streak"],
             "best_streak": row["best_streak"],
@@ -141,6 +166,65 @@ class Database:
                 "SELECT * FROM players WHERE token_hash = ?", (_token_hash(token),)
             ).fetchone()
         return self._public_profile(row) if row else None
+
+    def recent_bot_words(
+        self, token: object, bot_id: str, limit: int = 20
+    ) -> list[str]:
+        if not isinstance(token, str) or not isinstance(bot_id, str):
+            return []
+        limit = max(1, min(int(limit), 100))
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT history.normalized_word
+                FROM bot_history AS history
+                JOIN players ON players.id = history.player_id
+                WHERE players.token_hash = ? AND history.bot_id = ?
+                ORDER BY history.id DESC
+                LIMIT ?
+                """,
+                (_token_hash(token), bot_id, limit),
+            ).fetchall()
+        return [row["normalized_word"] for row in rows]
+
+    def bot_duel_count(self, token: object, bot_id: str) -> int:
+        if not isinstance(token, str) or not isinstance(bot_id, str):
+            return 0
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS total
+                FROM bot_history AS history
+                JOIN players ON players.id = history.player_id
+                WHERE players.token_hash = ? AND history.bot_id = ?
+                """,
+                (_token_hash(token), bot_id),
+            ).fetchone()
+        return row["total"]
+
+    def remember_bot_word(
+        self, token: object, bot_id: str, normalized_word: str
+    ) -> bool:
+        if (
+            not isinstance(token, str)
+            or not isinstance(bot_id, str)
+            or not isinstance(normalized_word, str)
+        ):
+            return False
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM players WHERE token_hash = ?", (_token_hash(token),)
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                """
+                INSERT INTO bot_history(player_id, bot_id, normalized_word)
+                VALUES (?, ?, ?)
+                """,
+                (row["id"], bot_id, normalized_word),
+            )
+        return True
 
     def set_character(self, token: object, character_id: object) -> dict | None:
         if not isinstance(token, str) or not isinstance(character_id, str):
@@ -220,7 +304,8 @@ class Database:
             connection.execute(
                 """
                 UPDATE players
-                SET xp = ?, total_score = total_score + ?, wins = ?,
+                SET xp = ?, total_score = total_score + ?, matches = matches + 1,
+                    wins = ?,
                     current_streak = ?, best_streak = ?, badges_json = ?,
                     unlocked_json = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?

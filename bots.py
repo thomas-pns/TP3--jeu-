@@ -160,6 +160,8 @@ def choose_bot_word(
         ]
         if traps:
             return _rng_choice(rng, traps)
+    elif bot_id == "boss":
+        catalog = [entry for entry in catalog if not entry.get("trap")]
 
     return choose_word(
         bot.difficulty,
