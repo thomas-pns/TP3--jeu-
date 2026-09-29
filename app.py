@@ -3,18 +3,18 @@ from flask_socketio import SocketIO, emit, join_room, leave_room, close_room, ro
 import json
 import random
 from pathlib import Path
-import threading
-import time
+import os
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# async_mode='threading' évite les dépendances natives (eventlet/gevent) qui posent problème à l'installation
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 BASE_DIR = Path(__file__).resolve().parent
 with open(BASE_DIR / "mots.json", encoding="utf-8") as f:
     mots = json.load(f)
 
-# Game state per room
+# état des parties, indexé par ID de salle
 games = {}
 
 def get_random_word(length=None):
@@ -27,13 +27,13 @@ def init_game(room_id, player1_sid, word=None):
         word = get_random_word()
     games[room_id] = {
         'word': word,
-        'masked': ['_' if i != 0 else word[0] for i in range(len(word))],  # reveal first letter
+        'masked': ['_' if i != 0 else word[0] for i in range(len(word))],  # première lettre révélée
         'guessed_letters': set(),
         'errors': 0,
         'max_errors': 8,
         'players': {player1_sid: {'name': f'Joueur1', 'score': 0}},
-        'current_turn': player1_sid,  # who guesses? In multiplayer, one chooses, other guesses. We'll handle via events.
-        'state': 'waiting_for_word',  # waiting_for_word, playing, finished
+        'current_turn': player1_sid,  # qui doit jouer ? on gère cela via les événements
+        'state': 'waiting_for_word',  # waiting_for_word / playing / finished
         'winner': None
     }
     return games[room_id]
@@ -50,21 +50,16 @@ def handle_connect():
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected:', request.sid)
-    # Clean up games where this sid is involved
     for room_id, game in list(games.items()):
         if request.sid in game['players']:
             leave_room(room_id)
-            # If only one player left, end game
             if len(game['players']) == 1:
-                # Notify remaining player
                 remaining_sid = [sid for sid in game['players'] if sid != request.sid][0]
                 emit('opponent_left', room=remaining_sid)
                 del games[room_id]
             else:
-                # Remove player
                 del game['players'][request.sid]
                 if game['current_turn'] == request.sid:
-                    # pass turn to other
                     next_sid = [sid for sid in game['players'] if sid != request.sid][0]
                     game['current_turn'] = next_sid
                     emit('turn_change', {'sid': next_sid}, room=room_id)
@@ -76,7 +71,6 @@ def handle_join_game(data):
     player_name = data.get('name', 'Anonyme')
     room_id = data.get('room_id')
     if not room_id:
-        # create new room
         import uuid
         room_id = str(uuid.uuid4())
     join_room(room_id)
@@ -92,12 +86,9 @@ def handle_join_game(data):
             return
         game['players'][sid] = {'name': player_name, 'score': 0}
         emit('joined_game', {'room_id': room_id, 'player_id': sid, 'players': [{'id': k, 'name': v['name']} for k, v in game['players'].items()]}, room=sid)
-        # notify others
         emit('player_joined', {'id': sid, 'name': player_name}, room=room_id, include_self=False)
-        # if now two players, start waiting for word
         if len(game['players']) == 2:
             game['state'] = 'waiting_for_word'
-            # randomly choose who chooses word
             chooser = random.choice(list(game['players'].keys()))
             game['chooser'] = chooser
             emitter = [sid for sid in game['players'] if sid != chooser][0]
@@ -124,7 +115,6 @@ def handle_submit_word(data):
     game['guessed_letters'] = set()
     game['errors'] = 0
     game['state'] = 'playing'
-    # notify both
     emitter = [s for s in game['players'] if s != sid][0]
     emit('word_set', {'masked': ' '.join(game['masked'])}, room=room_id)
     emit('your_turn_guess', room=emitter)
@@ -142,7 +132,6 @@ def handle_guess_letter(data):
     if game['state'] != 'playing':
         emit('error', {'msg': 'Game not playing'}, room=sid)
         return
-    # determine whose turn it is (the guesser)
     guesser = [s for s in game['players'] if s != game.get('chooser')][0]
     if sid != guesser:
         emit('error', {'msg': 'Not your turn to guess'}, room=sid)
@@ -163,15 +152,18 @@ def handle_guess_letter(data):
             game['state'] = 'finished'
             game['winner'] = guesser
             game['players'][guesser]['score'] += 1
-            emit('game_over', {'winner': guesser, 'word': game['word'], 'scores': {k: v['score'] for k, v in game['players'].items()}}, room=room_id)
+            emit('game_over', {'winner': guesser, 'word': game['word'],
+                                 'scores': {k: v['score'] for k, v in game['players'].items()}}, room=room_id)
     else:
         game['errors'] += 1
         emit('wrong_guess', {'letter': letter, 'errors': game['errors']}, room=room_id)
         if game['errors'] >= game['max_errors']:
             game['state'] = 'finished'
-            game['winner'] = game.get('chooser')  # the chooser wins if guesser fails
+            game['winner'] = game.get('chooser')
             game['players'][game['winner']]['score'] += 1
-            emit('game_over', {'winner': game['winner'], 'word': game['word'], 'scores': {k: v['score'] for k, v in game['players'].items()}}, room=room_id)
+            emit('game_over', {'winner': game['winner'], 'word': game['word'],
+                                 'scores': {k: v['score'] for k, v in game['players'].items()}}, room=room_id)
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
